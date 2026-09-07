@@ -1,0 +1,80 @@
+//@version=6
+strategy("XAUUSD Trend Strategy (EMA Cross + RSI + ATR)", shorttitle="XAUUSD-Trend",
+     overlay=true, initial_capital=10000, currency=currency.USD,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.percent, commission_value=0.0,
+     slippage=2, process_orders_on_close=true)
+
+// ============================================================
+//  XAU/USD Trend-Following Strategy
+//  EMA crossover for direction, RSI as a momentum confirmation
+//  filter, ATR-based stop-loss/take-profit and position sizing.
+//  Built to run in TradingView's Strategy Tester (bar-by-bar
+//  simulated fills = automated paper trading).
+// ============================================================
+
+// ---------------- Inputs ----------------
+grpTrend = "Trend (EMA Crossover)"
+fastLen = input.int(12, "Fast EMA Length", minval=1, group=grpTrend)
+slowLen = input.int(26, "Slow EMA Length", minval=1, group=grpTrend)
+
+grpMomentum = "Momentum Filter (RSI)"
+rsiLen = input.int(14, "RSI Length", minval=1, group=grpMomentum)
+useRsiFilter = input.bool(true, "Require RSI to confirm direction (>50 long, <50 short)", group=grpMomentum)
+
+grpRisk = "Risk Management (ATR)"
+atrLen = input.int(14, "ATR Length", minval=1, group=grpRisk)
+atrSLMult = input.float(1.5, "Stop Loss (x ATR)", minval=0.1, step=0.1, group=grpRisk)
+atrTPMult = input.float(3.0, "Take Profit (x ATR)", minval=0.1, step=0.1, group=grpRisk)
+riskPct = input.float(1.0, "Risk per Trade (% of equity)", minval=0.1, maxval=100, step=0.1, group=grpRisk)
+
+grpSession = "Session Filter"
+useSession = input.bool(false, "Only trade during session", group=grpSession)
+sessionTime = input.session("0800-1700", "Session (exchange time, e.g. London/NY overlap)", group=grpSession)
+
+grpDirection = "Trade Direction"
+allowLong = input.bool(true, "Allow Long Trades", group=grpDirection)
+allowShort = input.bool(true, "Allow Short Trades", group=grpDirection)
+
+// ---------------- Indicators ----------------
+fastEMA = ta.ema(close, fastLen)
+slowEMA = ta.ema(close, slowLen)
+rsiVal = ta.rsi(close, rsiLen)
+atrVal = ta.atr(atrLen)
+
+plot(fastEMA, "Fast EMA", color=color.new(color.aqua, 0))
+plot(slowEMA, "Slow EMA", color=color.new(color.orange, 0))
+bgcolor(fastEMA > slowEMA ? color.new(color.green, 92) : color.new(color.red, 92))
+
+inSession = useSession ? not na(time(timeframe.period, sessionTime)) : true
+
+longSignal = ta.crossover(fastEMA, slowEMA) and (not useRsiFilter or rsiVal > 50) and inSession and allowLong
+shortSignal = ta.crossunder(fastEMA, slowEMA) and (not useRsiFilter or rsiVal < 50) and inSession and allowShort
+
+// ---------------- Position sizing (risk % of equity per trade) ----------------
+stopDistance = atrVal * atrSLMult
+riskAmount = strategy.equity * (riskPct / 100)
+qty = stopDistance > 0 ? riskAmount / (stopDistance * syminfo.pointvalue) : 0.0
+
+// ---------------- Orders ----------------
+var float longStopPrice = na
+var float longTPPrice = na
+var float shortStopPrice = na
+var float shortTPPrice = na
+
+if longSignal
+    strategy.entry("Long", strategy.long, qty=qty)
+    longStopPrice := close - stopDistance
+    longTPPrice := close + atrVal * atrTPMult
+
+if shortSignal
+    strategy.entry("Short", strategy.short, qty=qty)
+    shortStopPrice := close + stopDistance
+    shortTPPrice := close - atrVal * atrTPMult
+
+strategy.exit("Long Exit", from_entry="Long", stop=longStopPrice, limit=longTPPrice)
+strategy.exit("Short Exit", from_entry="Short", stop=shortStopPrice, limit=shortTPPrice)
+
+// ---------------- Alerts (for the separate manual "Paper Trading" broker panel, or webhooks) ----------------
+alertcondition(longSignal, title="XAUUSD Long Signal", message="XAUUSD-Trend: LONG entry signal on {{ticker}} @ {{close}}")
+alertcondition(shortSignal, title="XAUUSD Short Signal", message="XAUUSD-Trend: SHORT entry signal on {{ticker}} @ {{close}}")
