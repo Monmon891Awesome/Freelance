@@ -1,0 +1,158 @@
+//@version=5
+// ICT-style multi-timeframe strategy: Daily bias -> 4H Fair Value Gap (FVG)
+// zone -> Break of Structure (BOS) confirmation on 15m/30m/1h triggers the
+// LONG or SHORT execution. Sized for MGC (Micro Gold futures), capped at a
+// max number of contracts AND a max dollar risk, whichever is smaller.
+//
+// Apply to the MGC continuous contract chart (e.g. COMEX:MGC1!) on any
+// chart timeframe -- this script pulls its own Daily/4H/15m/30m/1h data
+// via request.security() regardless of what timeframe the chart is on.
+// Verify in the Strategy Tester, then connect to Paper Trading and enable
+// auto-trading (see README.md in this folder).
+strategy(
+     title                = "ICT MTF: Daily Bias + 4H FVG + BOS (MGC)",
+     shorttitle           = "ICT-MTF Bot",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     default_qty_value    = 1,
+     commission_type      = strategy.commission.cash_per_contract,
+     commission_value     = 1.5,
+     slippage             = 1,
+     process_orders_on_close = true)
+
+// ---------------------------------------------------------------------
+// Inputs
+// ---------------------------------------------------------------------
+dailyTF       = input.timeframe("D",   "Daily bias timeframe", group = "Bias")
+dailyEmaLen   = input.int(20, "Daily EMA length (bias filter)", minval = 1, group = "Bias")
+
+fvgTF         = input.timeframe("240", "FVG timeframe", group = "Fair Value Gap")
+
+bosTF1        = input.timeframe("15", "BOS timeframe 1", group = "Break of Structure")
+bosTF2        = input.timeframe("30", "BOS timeframe 2", group = "Break of Structure")
+bosTF3        = input.timeframe("60", "BOS timeframe 3", group = "Break of Structure")
+swingLen      = input.int(5, "Swing pivot lookback (bars each side)", minval = 1, group = "Break of Structure")
+requireAllBOS = input.bool(false, "Require BOS on all 3 timeframes (unchecked = any one)", group = "Break of Structure")
+
+rrMultiple        = input.float(2.0, "Reward:Risk multiple for take-profit", minval = 0.5, step = 0.5, group = "Risk")
+stopBufferAtrMult = input.float(0.1, "Stop buffer beyond swing (x ATR)", minval = 0.0, step = 0.05, group = "Risk")
+maxContracts      = input.int(3,   "Max contracts (units)", minval = 1, group = "Risk - MGC sizing")
+maxRiskUSD        = input.float(250, "Max risk per trade (USD)", minval = 1, group = "Risk - MGC sizing")
+pointValue        = input.float(10, "$ value per 1.00 price move per contract (MGC = 10)", minval = 0.01, group = "Risk - MGC sizing")
+
+// ---------------------------------------------------------------------
+// Daily bias: bullish when daily close sits above a rising daily EMA
+// ---------------------------------------------------------------------
+[dClose, dEma] = request.security(syminfo.tickerid, dailyTF, [close, ta.ema(close, dailyEmaLen)], lookahead = barmerge.lookahead_off)
+biasUp   = dClose > dEma
+biasDown = dClose < dEma
+
+// ---------------------------------------------------------------------
+// 4H Fair Value Gap: classic 3-candle imbalance, held until mitigated
+// (a full close back through the zone invalidates it)
+// ---------------------------------------------------------------------
+f_fvgZone() =>
+    var float bullTop = na
+    var float bullBot = na
+    var float bearTop = na
+    var float bearBot = na
+    bullGap = low > high[2]
+    bearGap = high < low[2]
+    if bullGap
+        bullTop := low
+        bullBot := high[2]
+    if bearGap
+        bearTop := low[2]
+        bearBot := high
+    if not na(bullBot) and close < bullBot
+        bullTop := na
+        bullBot := na
+    if not na(bearTop) and close > bearTop
+        bearTop := na
+        bearBot := na
+    [bullTop, bullBot, bearTop, bearBot]
+
+[bullTop, bullBot, bearTop, bearBot] = request.security(syminfo.tickerid, fvgTF, f_fvgZone(), lookahead = barmerge.lookahead_off)
+
+priceInBullFVG = not na(bullTop) and close <= bullTop and close >= bullBot
+priceInBearFVG = not na(bearTop) and close <= bearTop and close >= bearBot
+
+// ---------------------------------------------------------------------
+// Break of Structure: close breaking the last confirmed swing high/low
+// ---------------------------------------------------------------------
+f_bos() =>
+    var float lastHigh = na
+    var float lastLow  = na
+    ph = ta.pivothigh(swingLen, swingLen)
+    pl = ta.pivotlow(swingLen, swingLen)
+    if not na(ph)
+        lastHigh := ph
+    if not na(pl)
+        lastLow := pl
+    bosUp   = not na(lastHigh) and ta.crossover(close, lastHigh)
+    bosDown = not na(lastLow)  and ta.crossunder(close, lastLow)
+    [bosUp, bosDown, lastLow, lastHigh]
+
+[bos1Up, bos1Down, low1, high1] = request.security(syminfo.tickerid, bosTF1, f_bos(), lookahead = barmerge.lookahead_off)
+[bos2Up, bos2Down, low2, high2] = request.security(syminfo.tickerid, bosTF2, f_bos(), lookahead = barmerge.lookahead_off)
+[bos3Up, bos3Down, low3, high3] = request.security(syminfo.tickerid, bosTF3, f_bos(), lookahead = barmerge.lookahead_off)
+
+bosUpCount   = (bos1Up   ? 1 : 0) + (bos2Up   ? 1 : 0) + (bos3Up   ? 1 : 0)
+bosDownCount = (bos1Down ? 1 : 0) + (bos2Down ? 1 : 0) + (bos3Down ? 1 : 0)
+
+bosUpConfirmed   = requireAllBOS ? bosUpCount   == 3 : bosUpCount   >= 1
+bosDownConfirmed = requireAllBOS ? bosDownCount == 3 : bosDownCount >= 1
+
+// ---------------------------------------------------------------------
+// Entry conditions: bias + FVG zone + BOS confirmation must all align
+// ---------------------------------------------------------------------
+longCond  = biasUp   and priceInBullFVG and bosUpConfirmed   and strategy.position_size == 0
+shortCond = biasDown and priceInBearFVG and bosDownConfirmed and strategy.position_size == 0
+
+atrVal = ta.atr(14)
+
+// Structure-based stop: just beyond the nearest confirmed lower-timeframe swing
+longStop  = math.min(na(low1)  ? close : low1,  na(low2)  ? close : low2)  - atrVal * stopBufferAtrMult
+shortStop = math.max(na(high1) ? close : high1, na(high2) ? close : high2) + atrVal * stopBufferAtrMult
+
+// ---------------------------------------------------------------------
+// Position sizing: capped at maxContracts AND at maxRiskUSD, whichever
+// is smaller -- never risk more than the tighter of the two limits.
+// ---------------------------------------------------------------------
+f_qty(stopDistance) =>
+    riskPerContract = stopDistance * pointValue
+    riskPerContract > 0 ? math.min(maxContracts, math.floor(maxRiskUSD / riskPerContract)) : 0
+
+if longCond
+    stopDist = close - longStop
+    qty = f_qty(stopDist)
+    if qty > 0
+        strategy.entry("Long", strategy.long, qty = qty)
+        strategy.exit("Long Exit", "Long", stop = longStop, limit = close + stopDist * rrMultiple)
+        alert("ICT-MTF Bot: LONG " + str.tostring(qty) + " on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+if shortCond
+    stopDist = shortStop - close
+    qty = f_qty(stopDist)
+    if qty > 0
+        strategy.entry("Short", strategy.short, qty = qty)
+        strategy.exit("Short Exit", "Short", stop = shortStop, limit = close - stopDist * rrMultiple)
+        alert("ICT-MTF Bot: SHORT " + str.tostring(qty) + " on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+// ---------------------------------------------------------------------
+// Plots
+// ---------------------------------------------------------------------
+plot(bullTop, "4H Bull FVG top",    color = color.new(color.green, 0), style = plot.style_linebr)
+plot(bullBot, "4H Bull FVG bottom", color = color.new(color.green, 0), style = plot.style_linebr)
+plot(bearTop, "4H Bear FVG top",    color = color.new(color.red, 0),   style = plot.style_linebr)
+plot(bearBot, "4H Bear FVG bottom", color = color.new(color.red, 0),   style = plot.style_linebr)
+bgcolor(priceInBullFVG ? color.new(color.green, 90) : priceInBearFVG ? color.new(color.red, 90) : na)
+
+var label infoLabel = na
+if barstate.islast
+    label.delete(infoLabel)
+    biasTxt = biasUp ? "BULLISH" : biasDown ? "BEARISH" : "NEUTRAL"
+    fvgTxt  = priceInBullFVG ? "IN BULLISH ZONE" : priceInBearFVG ? "IN BEARISH ZONE" : "none"
+    txt = "Daily Bias: " + biasTxt + "\n4H FVG: " + fvgTxt + "\nBOS up/down: " + str.tostring(bosUpCount) + "/" + str.tostring(bosDownCount)
+    infoLabel := label.new(bar_index, high, txt, style = label.style_label_down, color = color.new(color.blue, 80), textcolor = color.white)

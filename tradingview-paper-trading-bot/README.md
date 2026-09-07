@@ -32,22 +32,55 @@ validated the strategy logic here.
 
 ## What's in this folder
 
-- `strategies/ema_rsi_strategy.pine` — an EMA(9/21) crossover strategy,
-  filtered by RSI so it skips longs when RSI is overbought and skips
-  shorts when RSI is oversold, with ATR-based stop-loss and take-profit.
-  All the numbers are exposed as inputs so you can tune them without
-  touching code.
+- `strategies/ict_mtf_mgc_strategy.pine` — **primary strategy.** A
+  multi-timeframe ICT/Smart-Money-Concepts style bot built for MGC
+  (Micro Gold futures):
+  - **Daily bias** — bullish/bearish filter from the 1D close vs. a
+    daily EMA.
+  - **4H Fair Value Gap (FVG)** — locates the most recent unmitigated
+    3-candle imbalance on the 4H chart and treats it as the zone price
+    needs to be trading in to qualify for an entry.
+  - **Break of Structure (BOS)** — checks the 15m, 30m, and 1h
+    timeframes for a close breaking the last confirmed swing
+    high/low; by default any one of the three firing is enough to
+    trigger, with a toggle to require all three.
+  - **Execution** — a LONG fires when bias is bullish, price is inside
+    the bullish 4H FVG zone, and BOS confirms; SHORT is the mirror
+    image on the bearish side.
+  - **Risk/sizing** — position size is capped at both a max contract
+    count (default 3) and a max dollar risk (default $250), and the
+    bot always uses whichever cap is more restrictive for that trade's
+    stop distance. It skips the trade entirely if even 1 contract
+    would exceed the dollar cap. The stop sits just beyond the
+    triggering swing point (with a small ATR buffer); the target is a
+    configurable reward:risk multiple (default 2R).
+  - The `$ value per 1.00 price move per contract` input defaults to
+    10, matching MGC's contract size — update it if you point this at
+    a different instrument.
+  - This script fetches its own Daily/4H/15m/30m/1h data via
+    `request.security()`, so it works no matter what timeframe you
+    actually have the chart open on.
+
+- `strategies/ema_rsi_strategy.pine` — a simpler EMA(9/21) crossover
+  strategy, filtered by RSI so it skips longs when RSI is overbought
+  and skips shorts when RSI is oversold, with ATR-based stop-loss and
+  take-profit. Useful as a lighter-weight starting point or for a
+  different symbol/timeframe. All numbers are exposed as inputs.
 
 ## Setup: get it running on Paper Trading
 
-1. **Open TradingView** and go to any chart (pick the symbol/timeframe
-   you want to test, e.g. `BTCUSD` 15m or `AAPL` daily).
+1. **Open TradingView** and go to the chart you want to trade — for
+   the ICT/MGC strategy, use the MGC continuous contract, e.g.
+   `COMEX:MGC1!` (any chart timeframe is fine, since the script pulls
+   Daily/4H/15m/30m/1h data itself).
 2. Open the **Pine Editor** tab at the bottom of the screen.
 3. Click **Open** → **New blank script**, delete the placeholder code,
-   and paste in the contents of `strategies/ema_rsi_strategy.pine`.
-4. Click **Add to Chart**. You should see the fast/slow EMA lines plot
-   and (if there's trade history in view) triangles marking past
-   entries/exits.
+   and paste in the contents of `strategies/ict_mtf_mgc_strategy.pine`
+   (or `ema_rsi_strategy.pine` for the simpler version).
+4. Click **Add to Chart**. You should see the 4H FVG zone lines plot,
+   a background highlight when price is inside a zone, and an info
+   label (bottom-right of the latest bar) showing the current Daily
+   Bias / FVG status / BOS counts.
 5. Open the **Strategy Tester** tab (bottom panel) and check the
    **Performance Summary** / **List of Trades** to sanity-check the
    logic on historical data before trusting it live. Adjust the inputs
@@ -71,8 +104,22 @@ validated the strategy logic here.
 
 ## Tuning the strategy
 
-All key parameters are `input.*` calls at the top of the script, grouped
-in the settings dialog:
+All key parameters are `input.*` calls at the top of each script, grouped
+in the settings dialog. Change them from the strategy's Settings dialog
+(no code edits needed) and re-check the Strategy Tester results before
+re-enabling auto-trading.
+
+### `ict_mtf_mgc_strategy.pine`
+
+- **Bias** — daily timeframe and EMA length used for the trend filter.
+- **Fair Value Gap** — which timeframe FVGs are located on (default 4H).
+- **Break of Structure** — the three confirmation timeframes (default
+  15m/30m/1h), swing pivot lookback, and whether all three must agree.
+- **Risk** — reward:risk multiple, ATR stop buffer, max contracts, max
+  dollar risk per trade, and the per-contract point value (set this to
+  match whatever instrument you actually apply the script to).
+
+### `ema_rsi_strategy.pine`
 
 - **Trend** — fast/slow EMA lengths (default 9/21).
 - **Filter** — RSI length and the overbought/oversold thresholds used to
@@ -82,9 +129,6 @@ in the settings dialog:
 - **Risk** — ATR length and the stop-loss/take-profit multipliers.
 - **Backtest window** — restrict the historical backtest to a date range
   without affecting live auto-trading.
-
-Change these from the strategy's Settings dialog (no code edits needed)
-and re-check the Strategy Tester results before re-enabling auto-trading.
 
 ## Next steps (optional, once you're happy with the logic)
 
