@@ -60,6 +60,10 @@ validated the strategy logic here.
   - This script fetches its own Daily/4H/15m/30m/1h data via
     `request.security()`, so it works no matter what timeframe you
     actually have the chart open on.
+  - **Session gate** — only looks for a setup inside a 3-hour window
+    (default 08:30–11:30 America/New_York, the NY AM kill zone) and
+    takes at most one trade per session. Both the window and the
+    one-trade cap are inputs under the "Session" group.
 
 - `strategies/ema_rsi_strategy.pine` — a simpler EMA(9/21) crossover
   strategy, filtered by RSI so it skips longs when RSI is overbought
@@ -115,9 +119,43 @@ re-enabling auto-trading.
 - **Fair Value Gap** — which timeframe FVGs are located on (default 4H).
 - **Break of Structure** — the three confirmation timeframes (default
   15m/30m/1h), swing pivot lookback, and whether all three must agree.
-- **Risk** — reward:risk multiple, ATR stop buffer, max contracts, max
-  dollar risk per trade, and the per-contract point value (set this to
-  match whatever instrument you actually apply the script to).
+- **Risk** — reward:risk multiple (default 2.0, i.e. 1:2), ATR stop
+  buffer, max contracts, max dollar risk per trade, and the
+  per-contract point value (set this to match whatever instrument you
+  actually apply the script to).
+- **Session** — the 3-hour session window (default 08:30–11:30
+  America/New_York), its timezone, and whether to cap it at one trade
+  per session.
+
+## Backtesting 2019–2025
+
+MGC (Micro Gold futures) started trading on COMEX in 2019, so a
+2019–2025 range covers essentially the instrument's whole history —
+worth knowing going in, since there's no earlier MGC data to test
+against even if you wanted it.
+
+I can't run this backtest myself from here — TradingView's Strategy
+Tester executes inside your browser session against your account, and
+I don't have a free source of 2019–2025 intraday (15m/30m/1h) MGC data
+to reproduce it independently. Producing invented performance numbers
+would be worse than no numbers, so here's how to get the real ones in
+about a minute:
+
+1. Apply `ict_mtf_mgc_strategy.pine` to `COMEX:MGC1!`.
+2. Open **Strategy Tester** → the **Properties** tab (or the gear icon
+   on the strategy) → **Backtesting range** → set it to
+   `2019-01-01` through `2025-12-31` (or later, up to today).
+3. Confirm the defaults match what you asked for: **Risk → Reward:Risk
+   multiple = 2.0** (1:2) and **Session → Limit to 1 trade per
+   session** is checked, with the window set to whatever 3-hour block
+   you actually mean (NY AM 08:30–11:30 is the default assumption —
+   change it if you meant London or Asia).
+4. Read the **Performance Summary** and **List of Trades** tabs for
+   the real win rate, total trades, max drawdown, and net P&L over
+   that range. On a chart timeframe like 5m or 15m you'll get one
+   backtest bar per underlying bar, which is what you want for
+   accuracy here — a daily chart timeframe would understate how often
+   the session/BOS logic actually fires intrabar.
 
 ### `ema_rsi_strategy.pine`
 

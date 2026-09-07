@@ -1,8 +1,10 @@
 //@version=5
 // ICT-style multi-timeframe strategy: Daily bias -> 4H Fair Value Gap (FVG)
 // zone -> Break of Structure (BOS) confirmation on 15m/30m/1h triggers the
-// LONG or SHORT execution. Sized for MGC (Micro Gold futures), capped at a
-// max number of contracts AND a max dollar risk, whichever is smaller.
+// LONG or SHORT execution, gated to a single 3-hour session window with at
+// most one trade per session. Sized for MGC (Micro Gold futures), capped
+// at a max number of contracts AND a max dollar risk, whichever is smaller.
+// Take-profit defaults to a 1:2 reward:risk multiple.
 //
 // Apply to the MGC continuous contract chart (e.g. COMEX:MGC1!) on any
 // chart timeframe -- this script pulls its own Daily/4H/15m/30m/1h data
@@ -35,11 +37,18 @@ bosTF3        = input.timeframe("60", "BOS timeframe 3", group = "Break of Struc
 swingLen      = input.int(5, "Swing pivot lookback (bars each side)", minval = 1, group = "Break of Structure")
 requireAllBOS = input.bool(false, "Require BOS on all 3 timeframes (unchecked = any one)", group = "Break of Structure")
 
-rrMultiple        = input.float(2.0, "Reward:Risk multiple for take-profit", minval = 0.5, step = 0.5, group = "Risk")
+rrMultiple        = input.float(2.0, "Reward:Risk multiple for take-profit (1:2 default)", minval = 0.5, step = 0.5, group = "Risk")
 stopBufferAtrMult = input.float(0.1, "Stop buffer beyond swing (x ATR)", minval = 0.0, step = 0.05, group = "Risk")
 maxContracts      = input.int(3,   "Max contracts (units)", minval = 1, group = "Risk - MGC sizing")
 maxRiskUSD        = input.float(250, "Max risk per trade (USD)", minval = 1, group = "Risk - MGC sizing")
 pointValue        = input.float(10, "$ value per 1.00 price move per contract (MGC = 10)", minval = 0.01, group = "Risk - MGC sizing")
+
+// Session window: only look for a setup inside this 3-hour block, and take
+// at most one trade per session. Default is the NY AM kill zone -- change
+// sessionStr/sessionTz if you actually mean London or the Asia session.
+sessionStr         = input.session("0830-1130", "Session window (exchange time)", group = "Session")
+sessionTz          = input.string("America/New_York", "Session timezone", group = "Session")
+oneTradePerSession = input.bool(true, "Limit to 1 trade per session", group = "Session")
 
 // ---------------------------------------------------------------------
 // Daily bias: bullish when daily close sits above a rising daily EMA
@@ -105,10 +114,24 @@ bosUpConfirmed   = requireAllBOS ? bosUpCount   == 3 : bosUpCount   >= 1
 bosDownConfirmed = requireAllBOS ? bosDownCount == 3 : bosDownCount >= 1
 
 // ---------------------------------------------------------------------
-// Entry conditions: bias + FVG zone + BOS confirmation must all align
+// Session gate: only trade inside the configured window, at most once
+// per session
 // ---------------------------------------------------------------------
-longCond  = biasUp   and priceInBullFVG and bosUpConfirmed   and strategy.position_size == 0
-shortCond = biasDown and priceInBearFVG and bosDownConfirmed and strategy.position_size == 0
+inSession  = not na(time(timeframe.period, sessionStr, sessionTz))
+newSession = inSession and not inSession[1]
+
+var bool tradeTakenThisSession = false
+if newSession
+    tradeTakenThisSession := false
+
+canTrade = inSession and (not oneTradePerSession or not tradeTakenThisSession)
+
+// ---------------------------------------------------------------------
+// Entry conditions: bias + FVG zone + BOS confirmation must all align,
+// inside the session window, with the per-session trade cap respected
+// ---------------------------------------------------------------------
+longCond  = biasUp   and priceInBullFVG and bosUpConfirmed   and strategy.position_size == 0 and canTrade
+shortCond = biasDown and priceInBearFVG and bosDownConfirmed and strategy.position_size == 0 and canTrade
 
 atrVal = ta.atr(14)
 
@@ -131,6 +154,7 @@ if longCond
         strategy.entry("Long", strategy.long, qty = qty)
         strategy.exit("Long Exit", "Long", stop = longStop, limit = close + stopDist * rrMultiple)
         alert("ICT-MTF Bot: LONG " + str.tostring(qty) + " on " + syminfo.ticker, alert.freq_once_per_bar_close)
+        tradeTakenThisSession := true
 
 if shortCond
     stopDist = shortStop - close
@@ -139,6 +163,7 @@ if shortCond
         strategy.entry("Short", strategy.short, qty = qty)
         strategy.exit("Short Exit", "Short", stop = shortStop, limit = close - stopDist * rrMultiple)
         alert("ICT-MTF Bot: SHORT " + str.tostring(qty) + " on " + syminfo.ticker, alert.freq_once_per_bar_close)
+        tradeTakenThisSession := true
 
 // ---------------------------------------------------------------------
 // Plots
@@ -148,11 +173,13 @@ plot(bullBot, "4H Bull FVG bottom", color = color.new(color.green, 0), style = p
 plot(bearTop, "4H Bear FVG top",    color = color.new(color.red, 0),   style = plot.style_linebr)
 plot(bearBot, "4H Bear FVG bottom", color = color.new(color.red, 0),   style = plot.style_linebr)
 bgcolor(priceInBullFVG ? color.new(color.green, 90) : priceInBearFVG ? color.new(color.red, 90) : na)
+bgcolor(inSession ? color.new(color.blue, 95) : na)
 
 var label infoLabel = na
 if barstate.islast
     label.delete(infoLabel)
-    biasTxt = biasUp ? "BULLISH" : biasDown ? "BEARISH" : "NEUTRAL"
-    fvgTxt  = priceInBullFVG ? "IN BULLISH ZONE" : priceInBearFVG ? "IN BEARISH ZONE" : "none"
-    txt = "Daily Bias: " + biasTxt + "\n4H FVG: " + fvgTxt + "\nBOS up/down: " + str.tostring(bosUpCount) + "/" + str.tostring(bosDownCount)
+    biasTxt    = biasUp ? "BULLISH" : biasDown ? "BEARISH" : "NEUTRAL"
+    fvgTxt     = priceInBullFVG ? "IN BULLISH ZONE" : priceInBearFVG ? "IN BEARISH ZONE" : "none"
+    sessionTxt = inSession ? (tradeTakenThisSession ? "IN SESSION (trade taken)" : "IN SESSION (armed)") : "outside session"
+    txt = "Daily Bias: " + biasTxt + "\n4H FVG: " + fvgTxt + "\nBOS up/down: " + str.tostring(bosUpCount) + "/" + str.tostring(bosDownCount) + "\nSession: " + sessionTxt
     infoLabel := label.new(bar_index, high, txt, style = label.style_label_down, color = color.new(color.blue, 80), textcolor = color.white)
