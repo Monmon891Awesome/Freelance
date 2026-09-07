@@ -1,0 +1,77 @@
+//@version=5
+// EMA Crossover + RSI Filter strategy, built for TradingView's built-in
+// Paper Trading broker. Apply this to a chart, verify it in the Strategy
+// Tester, then connect it to a Paper Trading account and enable
+// auto-trading (see README.md in this folder for the exact steps).
+strategy(
+     title                = "EMA Crossover + RSI Filter (Paper Trading Bot)",
+     shorttitle           = "EMA-RSI Bot",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 10,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.05,
+     slippage             = 1,
+     process_orders_on_close = true)
+
+// ---------------------------------------------------------------------
+// Inputs
+// ---------------------------------------------------------------------
+fastLen      = input.int(9,  "Fast EMA length", minval = 1, group = "Trend")
+slowLen      = input.int(21, "Slow EMA length", minval = 1, group = "Trend")
+
+rsiLen       = input.int(14, "RSI length", minval = 1, group = "Filter")
+rsiLongMax   = input.int(70, "Skip longs when RSI above", minval = 1, maxval = 100, group = "Filter")
+rsiShortMin  = input.int(30, "Skip shorts when RSI below", minval = 0, maxval = 100, group = "Filter")
+
+allowLongs   = input.bool(true,  "Allow long trades",  group = "Direction")
+allowShorts  = input.bool(false, "Allow short trades", group = "Direction")
+
+atrLen       = input.int(14, "ATR length", minval = 1, group = "Risk")
+slAtrMult    = input.float(1.5, "Stop-loss (x ATR)",   minval = 0.1, step = 0.1, group = "Risk")
+tpAtrMult    = input.float(3.0, "Take-profit (x ATR)", minval = 0.1, step = 0.1, group = "Risk")
+
+dateFrom     = input.time(timestamp("2020-01-01"), "Backtest start", group = "Backtest window")
+dateTo       = input.time(timestamp("2099-01-01"), "Backtest end",   group = "Backtest window")
+
+// ---------------------------------------------------------------------
+// Indicators
+// ---------------------------------------------------------------------
+fastEma = ta.ema(close, fastLen)
+slowEma = ta.ema(close, slowLen)
+rsiVal  = ta.rsi(close, rsiLen)
+atrVal  = ta.atr(atrLen)
+
+inWindow = (time >= dateFrom) and (time <= dateTo)
+
+longSignal  = ta.crossover(fastEma, slowEma)  and rsiVal < rsiLongMax
+shortSignal = ta.crossunder(fastEma, slowEma) and rsiVal > rsiShortMin
+
+// ---------------------------------------------------------------------
+// Entries / exits
+// ---------------------------------------------------------------------
+if inWindow
+    if allowLongs and longSignal
+        strategy.entry("Long", strategy.long)
+        alert("EMA-RSI Bot: LONG entry on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+    if allowShorts and shortSignal
+        strategy.entry("Short", strategy.short)
+        alert("EMA-RSI Bot: SHORT entry on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+if strategy.position_size > 0
+    stopPrice = strategy.position_avg_price - atrVal * slAtrMult
+    limitPrice = strategy.position_avg_price + atrVal * tpAtrMult
+    strategy.exit("Long Exit", "Long", stop = stopPrice, limit = limitPrice)
+
+if strategy.position_size < 0
+    stopPrice = strategy.position_avg_price + atrVal * slAtrMult
+    limitPrice = strategy.position_avg_price - atrVal * tpAtrMult
+    strategy.exit("Short Exit", "Short", stop = stopPrice, limit = limitPrice)
+
+// ---------------------------------------------------------------------
+// Plots
+// ---------------------------------------------------------------------
+plot(fastEma, "Fast EMA", color = color.blue)
+plot(slowEma, "Slow EMA", color = color.orange)
