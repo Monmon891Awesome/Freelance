@@ -69,6 +69,15 @@ validated the strategy logic here.
     `barstate.isconfirmed` gate mean entries only ever evaluate on a
     fully closed bar, never a live, still-forming one.
 
+- `strategies/scalping_5pip_strategy.pine` — a fast scalper: EMA(5/13)
+  crossover filtered by RSI(7), with a **fixed 5-pip stop-loss as 1R**
+  and a take-profit at a configurable RR multiple of that. Deliberately
+  has **no session gate and no trade cap** — it takes every valid
+  signal, all session long, as often as it fires. Pip size is an input
+  (defaults to 0.0001 for most FX pairs) since it varies by
+  symbol/broker — set it to match whatever you apply this to. Meant for
+  a low chart timeframe (1m–5m).
+
 - `strategies/ema_rsi_strategy.pine` — a simpler EMA(9/21) crossover
   strategy, filtered by RSI so it skips longs when RSI is overbought
   and skips shorts when RSI is oversold, with ATR-based stop-loss and
@@ -83,8 +92,9 @@ validated the strategy logic here.
    Daily/4H/15m/30m/1h data itself).
 2. Open the **Pine Editor** tab at the bottom of the screen.
 3. Click **Open** → **New blank script**, delete the placeholder code,
-   and paste in the contents of `strategies/ict_mtf_mgc_strategy.pine`
-   (or `ema_rsi_strategy.pine` for the simpler version).
+   and paste in the contents of whichever strategy you want to test
+   (`ict_mtf_mgc_strategy.pine`, `scalping_5pip_strategy.pine`, or
+   `ema_rsi_strategy.pine`).
 4. Click **Add to Chart**. You should see the 4H FVG zone lines plot,
    a background highlight when price is inside a zone, and an info
    label (bottom-right of the latest bar) showing the current Daily
@@ -160,6 +170,15 @@ about a minute:
    backtest bar per underlying bar, which is what you want for
    accuracy here — a daily chart timeframe would understate how often
    the session/BOS logic actually fires intrabar.
+
+### `scalping_5pip_strategy.pine`
+
+- **Trend** — fast/slow EMA lengths (default 5/13).
+- **Filter** — RSI length and the overbought/oversold thresholds.
+- **Direction** — allow longs, shorts, or both (both on by default).
+- **Risk** — pip size (match your symbol/broker), the fixed stop in pips
+  (default 5, i.e. 1R = 5 pips), and the reward:risk multiple for the
+  take-profit.
 
 ### `ema_rsi_strategy.pine`
 

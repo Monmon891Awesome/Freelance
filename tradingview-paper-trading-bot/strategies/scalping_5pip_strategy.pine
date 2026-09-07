@@ -1,0 +1,77 @@
+//@version=5
+// Fast scalping strategy: EMA(5/13) crossover filtered by RSI, fixed
+// 5-pip risk unit (1R = 5 pips), target = 1R x a configurable RR
+// multiple. No session gate and no trade cap -- every valid signal is
+// taken, all session long, as fast as the chart allows.
+//
+// Intended for a low chart timeframe (1m-5m) on a forex/CFD symbol.
+// "Pip size" is exposed as an input rather than auto-detected, since
+// it varies by symbol (0.0001 for most FX pairs, 0.01 for JPY pairs,
+// 0.1/0.01 for metals depending on the broker) -- set it to match
+// whatever you actually apply this to.
+strategy(
+     title                = "Scalper: 5-Pip RR, Unlimited Trades",
+     shorttitle           = "5-Pip Scalper",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 10,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 1,
+     process_orders_on_close = true,
+     calc_on_every_tick   = false)
+
+// ---------------------------------------------------------------------
+// Inputs
+// ---------------------------------------------------------------------
+fastLen   = input.int(5,  "Fast EMA length", minval = 1, group = "Trend")
+slowLen   = input.int(13, "Slow EMA length", minval = 1, group = "Trend")
+
+rsiLen      = input.int(7,  "RSI length", minval = 1, group = "Filter")
+rsiLongMax  = input.int(75, "Skip longs when RSI above",  minval = 1, maxval = 100, group = "Filter")
+rsiShortMin = input.int(25, "Skip shorts when RSI below", minval = 0, maxval = 100, group = "Filter")
+
+allowLongs  = input.bool(true, "Allow long trades",  group = "Direction")
+allowShorts = input.bool(true, "Allow short trades", group = "Direction")
+
+pipSize    = input.float(0.0001, "Pip size (price units)", minval = 0.00001, step = 0.00001, group = "Risk")
+stopPips   = input.float(5, "Stop-loss (pips) -- this is 1R", minval = 0.1, step = 0.5, group = "Risk")
+rrMultiple = input.float(2.0, "Reward:Risk multiple for take-profit", minval = 0.5, step = 0.5, group = "Risk")
+
+// ---------------------------------------------------------------------
+// Signal: fast EMA crossover, filtered by RSI
+// ---------------------------------------------------------------------
+fastEma = ta.ema(close, fastLen)
+slowEma = ta.ema(close, slowLen)
+rsiVal  = ta.rsi(close, rsiLen)
+
+longSignal  = allowLongs  and ta.crossover(fastEma, slowEma)  and rsiVal < rsiLongMax
+shortSignal = allowShorts and ta.crossunder(fastEma, slowEma) and rsiVal > rsiShortMin
+
+// ---------------------------------------------------------------------
+// Entries: no session gate, no trade cap -- take every signal while flat
+// ---------------------------------------------------------------------
+stopDist = stopPips * pipSize
+
+if longSignal and strategy.position_size == 0 and barstate.isconfirmed
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop = close - stopDist, limit = close + stopDist * rrMultiple)
+    alert("5-Pip Scalper: LONG on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+if shortSignal and strategy.position_size == 0 and barstate.isconfirmed
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop = close + stopDist, limit = close - stopDist * rrMultiple)
+    alert("5-Pip Scalper: SHORT on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+// ---------------------------------------------------------------------
+// Plots
+// ---------------------------------------------------------------------
+plot(fastEma, "Fast EMA", color = color.blue)
+plot(slowEma, "Slow EMA", color = color.orange)
+
+var label infoLabel = na
+if barstate.islast
+    label.delete(infoLabel)
+    txt = "RSI: " + str.tostring(rsiVal, "#.#") + "\n1R = " + str.tostring(stopPips) + " pips\nTarget = " + str.tostring(rrMultiple, "#.#") + "R"
+    infoLabel := label.new(bar_index, high, txt, style = label.style_label_down, color = color.new(color.blue, 80), textcolor = color.white)
